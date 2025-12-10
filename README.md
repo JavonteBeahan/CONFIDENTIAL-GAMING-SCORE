@@ -231,6 +231,333 @@ FHE.allow(value, msg.sender);   // Missing allowThis!
 
 ---
 
+## 🎓 Advanced Technical Reference
+
+### Core Concept: Privacy-Preserving Gaming
+
+Traditional gaming systems expose player scores publicly. The Confidential Gaming Score system encrypts all gaming data, enabling:
+- **Anonymous Competition** - Players compete without score visibility to others
+- **Privacy-First Statistics** - Network-wide data maintained without exposing individual scores
+- **Confidential Leaderboards** - Rankings calculated without revealing personal performance
+- **Encrypted Achievements** - Earn badges while preserving complete privacy
+
+### Extended FHEVM Data Types
+
+```solidity
+// Encrypted unsigned integers of various bit widths
+euint8 byte_value;             // 8-bit encrypted unsigned integer
+euint16 short_value;           // 16-bit encrypted unsigned integer
+euint32 score_value;           // 32-bit encrypted unsigned integer (commonly used)
+euint64 large_value;           // 64-bit encrypted unsigned integer
+
+// Encrypted boolean for conditional logic
+ebool comparison_result;       // Result of encrypted comparison operations
+
+// Encrypted addresses for privacy-preserving access control
+eaddress encrypted_address;    // Encrypted wallet addresses
+```
+
+### Comprehensive Encrypted Operations
+
+```solidity
+// ====== COMPARISONS ======
+ebool result = FHE.gt(a, b);       // Greater than (>)
+ebool result = FHE.gte(a, b);      // Greater or equal (>=)
+ebool result = FHE.lt(a, b);       // Less than (<)
+ebool result = FHE.lte(a, b);      // Less or equal (<=)
+ebool result = FHE.eq(a, b);       // Equal (==)
+ebool result = FHE.ne(a, b);       // Not equal (!=)
+
+// ====== ARITHMETIC ======
+euint32 result = FHE.add(a, b);    // Addition
+euint32 result = FHE.sub(a, b);    // Subtraction
+euint32 result = FHE.mul(a, b);    // Multiplication
+euint32 result = FHE.div(a, b);    // Division
+
+// ====== BITWISE LOGIC ======
+euint32 result = FHE.and(a, b);    // Bitwise AND
+euint32 result = FHE.or(a, b);     // Bitwise OR
+euint32 result = FHE.xor(a, b);    // Bitwise XOR
+```
+
+### Contract Walkthrough: ConfidentialGamingScore
+
+#### Player Registration Phase
+
+```solidity
+function registerPlayer() external {
+    // Prevent duplicate registration
+    require(!isPlayerRegistered[msg.sender], "Already registered");
+
+    // Mark player as registered
+    isPlayerRegistered[msg.sender] = true;
+    playerRegistry.push(msg.sender);
+
+    // Initialize player data structures
+    PlayerData storage data = playerData[msg.sender];
+    data.registrationBlock = block.number;
+    data.hasScore = false;
+    data.lastUpdateBlock = block.number;
+
+    emit PlayerRegistered(msg.sender, block.timestamp);
+}
+```
+
+#### Encrypted Score Submission
+
+```solidity
+function submitScore(
+    bytes calldata encryptedScoreInput,    // Encrypted value from client
+    bytes calldata inputProof               // ZK proof of encryption validity
+) external onlyRegisteredPlayer {
+    // Convert client-side encrypted input to contract state
+    euint32 score = FHE.fromExternal(encryptedScoreInput, inputProof);
+
+    // Store encrypted score (never accessible as plaintext)
+    playerData[msg.sender].encryptedScore = score;
+    playerData[msg.sender].hasScore = true;
+    playerData[msg.sender].lastUpdateBlock = block.number;
+
+    // ✅ CRITICAL: Grant both permissions for FHE operations
+    FHE.allowThis(score);              // Enables contract to perform operations
+    FHE.allow(score, msg.sender);      // Enables user to decrypt results
+
+    // Events are emitted (without exposing encrypted data)
+    emit ScoreSubmitted(msg.sender, block.timestamp);
+}
+```
+
+#### Encrypted Queries and Comparisons
+
+```solidity
+// Retrieve own encrypted score (only accessible by owner)
+function getMyScore() external view onlyWithScore returns (euint32) {
+    require(playerData[msg.sender].hasScore, "No score submitted");
+    return playerData[msg.sender].encryptedScore;
+}
+
+// Compare scores without exposing either value
+function isScoreHigherThan(address other)
+    external view
+    onlyWithScore
+    returns (ebool)
+{
+    require(playerData[other].hasScore, "Other player has no score");
+
+    // Result is encrypted - safely returned to caller
+    return FHE.gt(
+        playerData[msg.sender].encryptedScore,
+        playerData[other].encryptedScore
+    );
+}
+
+// Check achievement threshold (result encrypted)
+function meetsAchievementThreshold(uint32 threshold)
+    external view
+    onlyWithScore
+    returns (ebool)
+{
+    return FHE.gte(
+        playerData[msg.sender].encryptedScore,
+        FHE.asEuint32(threshold)
+    );
+}
+```
+
+### Frontend Integration with fhevmjs
+
+```typescript
+import { createInstance } from 'fhevmjs';
+import { ethers } from 'ethers';
+
+// Step 1: Initialize FHE client
+const fhevm = await createInstance({
+  chainId: 8009,                        // Zama devnet chain ID
+  networkUrl: "https://devnet.zama.ai/",
+});
+
+// Step 2: Encrypt sensitive data on client
+const plainScore = 1500;
+const encryptedScoreData = fhevm.encrypt32(plainScore);
+
+// Step 3: Submit encrypted data to contract
+const provider = new ethers.JsonRpcProvider("https://devnet.zama.ai/");
+const signer = new ethers.Wallet(privateKey, provider);
+
+const contract = new ethers.Contract(
+  contractAddress,
+  contractABI,
+  signer
+);
+
+// Submit encrypted score
+const transaction = await contract.submitScore(
+  encryptedScoreData.handles[0],
+  encryptedScoreData.inputProof
+);
+await transaction.wait();
+
+// Step 4: Query encrypted results
+const encryptedScore = await contract.getMyScore();
+
+// Step 5: Generate decryption capability
+const publicKey = await fhevm.generatePublicKey({
+  verifyingContract: contractAddress,
+  userAddress: signer.address,
+});
+
+// Step 6: Decrypt client-side
+const decryptedScore = fhevm.decrypt(
+  encryptedScore,
+  publicKey.privateKey
+);
+console.log("Your decrypted score:", decryptedScore);
+```
+
+### Enhanced Security Patterns
+
+#### Permission System Deep Dive
+
+```solidity
+// ✅ CORRECT: Two-part permission system
+FHE.allowThis(encryptedValue);          // Grants contract internal access
+FHE.allow(encryptedValue, msg.sender);  // Grants user decryption capability
+
+// Why both are essential:
+// - allowThis: Contract needs this to perform ANY FHE operation
+// - allow: User needs this to decrypt results client-side
+// - Missing either: Operations fail or decryption impossible
+
+// ❌ WRONG: Missing allowThis causes all operations to fail
+FHE.allow(encryptedValue, msg.sender);  // Insufficient without allowThis!
+```
+
+#### Input Proof Verification
+
+```solidity
+// ✅ ALWAYS validate encrypted inputs
+function submitScore(
+    bytes calldata encryptedScoreInput,
+    bytes calldata inputProof
+) external onlyRegisteredPlayer {
+    // Verify non-empty inputs
+    require(encryptedScoreInput.length > 0, "Invalid encrypted input");
+    require(inputProof.length > 0, "Invalid zero-knowledge proof");
+
+    // FHEVM validates the proof internally during fromExternal
+    euint32 score = FHE.fromExternal(encryptedScoreInput, inputProof);
+
+    // If proof is invalid, fromExternal reverts
+}
+```
+
+#### Privacy Preservation Techniques
+
+```solidity
+// ✅ Keep values encrypted throughout
+function getScore(address player)
+    external view
+    returns (euint32)
+{
+    // Returns encrypted value - safe
+    return playerData[player].encryptedScore;
+
+    // ❌ NEVER do this:
+    // return _decryptScore(playerData[player]); // Exposes plaintext!
+}
+
+// ✅ User-exclusive decryption
+function getMyScore()
+    external view
+    onlyWithScore
+    returns (euint32)
+{
+    // Contract returns encrypted data
+    // Only caller can decrypt due to FHE.allow(value, msg.sender)
+    return playerData[msg.sender].encryptedScore;
+}
+
+// ✅ Aggregate computations without exposing individuals
+function getNetworkStats()
+    external view
+    returns (uint256 totalPlayers, uint256 totalScores)
+{
+    // Returns only aggregates, never individual encrypted data
+    return (playerRegistry.length, totalPlayerCount);
+}
+```
+
+### FHEVM Operations Reference
+
+| Category | Operations |
+|----------|-----------|
+| **Comparisons** | `gt`, `gte`, `lt`, `lte`, `eq`, `ne` |
+| **Arithmetic** | `add`, `sub`, `mul`, `div`, `rem` |
+| **Bitwise** | `and`, `or`, `xor`, `shl`, `shr` |
+| **Conversion** | `asEuint8`, `asEuint16`, `asEuint32`, `asEuint64` |
+| **External** | `fromExternal` (with proof) |
+| **Permission** | `allowThis`, `allow` |
+
+### Common Pitfalls and Solutions
+
+| Problem | ❌ Wrong | ✅ Correct | Impact |
+|---------|---------|-----------|--------|
+| Missing allowThis | `FHE.allow(val, user)` | Add `FHE.allowThis(val)` first | Operations fail |
+| Mixed types | `FHE.gt(euint32, uint32)` | Use `FHE.asEuint32(uint32)` | Type mismatch |
+| Exposing plaintext | Store decrypted scores | Keep values encrypted | Privacy breach |
+| Invalid proofs | Empty proof bytes | Verify proof from client | Decryption fails |
+| Wrong permissions | Contract-only access | Grant both permissions | Decryption impossible |
+
+### Gas Optimization Strategies
+
+Current gas estimates:
+- `registerPlayer()`: ~50,000 gas
+- `submitScore()`: ~150,000 gas
+- `getMyScore()`: ~30,000 gas (view function)
+- `isScoreHigherThan()`: ~35,000 gas (view function)
+
+Optimization techniques:
+- **Batch operations**: Group multiple transactions
+- **View functions**: Use for read-only queries (no gas cost)
+- **Minimize FHE ops**: Each FHE operation costs gas
+- **Storage layout**: Optimize contract storage packing
+- **Event indexing**: Use indexed parameters for off-chain filtering
+
+### Learning Path for Developers
+
+1. **Understand Basics**: Read this README and TUTORIAL.md
+2. **Study Examples**: Review contract source code
+3. **Run Tests**: Execute test suite and examine test cases
+4. **Modify Contracts**: Make small changes and retest
+5. **Deploy**: Deploy to Zama devnet with test transactions
+6. **Build**: Create your own FHE-enabled contracts
+
+### Advanced Integration Scenarios
+
+#### Multi-Game Platform
+```solidity
+// Track scores across multiple games while maintaining privacy
+mapping(bytes32 gameId => mapping(address => euint32)) gameScores;
+```
+
+#### Encrypted Tournaments
+```solidity
+// Time-limited competitions with encrypted rankings
+mapping(uint256 tournamentId => TournamentData) tournaments;
+```
+
+#### Privacy-Preserving Analytics
+```solidity
+// Derive insights without exposing individual player data
+struct NetworkStats {
+    uint256 totalPlayers;
+    uint256 averageScore;  // Computed on encrypted data
+    uint256 medianRank;
+}
+```
+
+---
+
 ## 📁 Project Structure
 
 ```
