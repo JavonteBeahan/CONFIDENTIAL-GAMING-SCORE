@@ -1,0 +1,14 @@
+node_modules/
+artifacts/
+cache/
+dist/
+build/
+coverage/
+package-lock.json
+*.lock
+.next
+out
+dist
+.env
+.env.local
+.env.*.local
