@@ -4,7 +4,7 @@
 
 **Confidential Gaming Score** is a comprehensive FHEVM (Fully Homomorphic Encryption Virtual Machine) examples hub demonstrating privacy-preserving smart contract development using Zama's FHE technology. This project provides production-ready contracts, complete automation tools, and professional documentation for building confidential decentralized applications.
 
-[CONFIDENTIAL GAMING SCORE.mp4](https://streamable.com/jd02d2)
+[CONFIDENTIAL GAMING SCORE.mp4](https://youtu.be/9ChkUmOoBx8)
 
 [Live Demo](https://anonymous-gaming-score.vercel.app/)
 
